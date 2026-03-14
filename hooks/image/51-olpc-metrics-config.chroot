@@ -1,0 +1,54 @@
+#!/bin/bash
+# echo "Copying first-run service and script to image..."
+
+# Create the necessary directories inside the image.
+# mkdir -p /etc/systemd/system
+mkdir -p /usr/local/bin
+# mkdir -p /etc/metrics
+
+# # Creates the systemd service that triggers the script to collect the serial
+# # number on OLPC devices.
+# #!/bin/bash
+# cat > /etc/systemd/system/olpc-sn-collector.service <<EOF
+# [Unit]
+# Description=Collects OLPC device serial number
+
+# [Service]
+# Type=oneshot
+# ExecStart=/usr/local/bin/olpc-sn-collector
+# RemainAfterExit=yes
+# StandardOutput=journal
+
+# [Install]
+# WantedBy=multi-user.target
+# EOF
+
+# # Create the location configuration file that will contain the device serial
+# # number.
+# cat > /etc/metrics/location.conf <<EOF
+# [Label]
+# facility = OLPC Factory 2026
+# street = 
+# country = 
+# state = 
+# city = 
+# id = 
+# EOF
+
+# Creates the script that collects the serial number of OLPC devices.
+cat > /usr/local/bin/olpc-metrics-config <<'EOF'
+
+# Test for olpc-metrics-config
+
+EOF
+
+# Grant execution permission to the script.
+chmod +x /usr/local/bin/olpc-metrics-config
+
+# # Enable the service for the next boot.
+# # Note: The systemd daemon itself is not running during this hook. This command
+# # simply creates the necessary symlink for the service to be enabled on the
+# # first real boot of the system.
+# ln -s /etc/systemd/system/olpc-sn-collector.service /etc/systemd/system/multi-user.target.wants/
+
+# echo "First-run service enabled."
