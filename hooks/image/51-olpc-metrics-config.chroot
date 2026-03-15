@@ -4,7 +4,7 @@
 mkdir -p /usr/local/bin
 
 # Creates the script that collects the serial number of OLPC devices.
-cat > /usr/local/bin/olpc-metrics-config <<'EOF'
+cat > /usr/local/bin/olpc-metrics-config <<'OLPC_METRICS_SCRIPT'
 
 #!/usr/bin/env bash
 set -euo pipefail
@@ -811,7 +811,7 @@ main() {
 
 main "$@"
 
-EOF
+OLPC_METRICS_SCRIPT
 
 # Grant execution permission to the script.
 chmod +x /usr/local/bin/olpc-metrics-config
