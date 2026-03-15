@@ -1,54 +1,817 @@
 #!/bin/bash
-# echo "Copying first-run service and script to image..."
 
 # Create the necessary directories inside the image.
-# mkdir -p /etc/systemd/system
 mkdir -p /usr/local/bin
-# mkdir -p /etc/metrics
-
-# # Creates the systemd service that triggers the script to collect the serial
-# # number on OLPC devices.
-# #!/bin/bash
-# cat > /etc/systemd/system/olpc-sn-collector.service <<EOF
-# [Unit]
-# Description=Collects OLPC device serial number
-
-# [Service]
-# Type=oneshot
-# ExecStart=/usr/local/bin/olpc-sn-collector
-# RemainAfterExit=yes
-# StandardOutput=journal
-
-# [Install]
-# WantedBy=multi-user.target
-# EOF
-
-# # Create the location configuration file that will contain the device serial
-# # number.
-# cat > /etc/metrics/location.conf <<EOF
-# [Label]
-# facility = OLPC Factory 2026
-# street = 
-# country = 
-# state = 
-# city = 
-# id = 
-# EOF
 
 # Creates the script that collects the serial number of OLPC devices.
 cat > /usr/local/bin/olpc-metrics-config <<'EOF'
 
-# Test for olpc-metrics-config
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================
+#  Descripcion:
+#    - Muestra un menu de configuracion al iniciar.
+#    - Crea o actualiza /etc/metrics/location.conf
+#      (o location-testing.conf si TESTING=TRUE).
+#    - Inserta datos de escuela, ciudad, estado, pais y numero de serie.
+#    - Muestra la version de la imagen EndlessOS y la personality extraida.
+#    - Valida que la personality detectada este en la lista permitida.
+#    - Opcionalmente configura el wallpaper del usuario activo con gsettings.
+#    - Verifica conexion a internet y ejecuta eos-upload-metrics.
+#    - Guarda los valores predeterminados en un archivo persistente.
+#  Version: v9 - from olpc-eos-image-builder
+#  Fecha:   14-mar-2026
+# ============================================================
+
+# ========== Configuracion inicial incorporada ==========
+# Cambia a "FALSE" para escribir /etc/metrics/location.conf
+# TESTING="TRUE"
+TESTING="FALSE"
+
+# Valores por defecto incorporados
+DEFAULT_COUNTRY="NI-DEV"
+DEFAULT_STATE="MGA-DEV"
+DEFAULT_CITY="MANAGUA-DEV"
+DEFAULT_FACILITY="OLPC-DEV"
+DEFAULT_STREET="K-DEV"
+
+
+# ========== Configuracion de Wallpaper ==========
+# Cambia a "FALSE" para omitir la configuracion del fondo
+WALLPAPER_ENABLED="FALSE"
+
+# Usuario objetivo:
+# - Si se deja vacio, se intenta detectar automaticamente.
+# - Si ejecutas con sudo, normalmente se usara SUDO_USER.
+WALLPAPER_TARGET_USER="${SUDO_USER:-}"
+
+# Rutas base relativas al directorio del script para evitar usuarios quemados.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_CONTENT_DIR="${SCRIPT_DIR}/olpc_metrics_conf"
+ASSETS_DIR="${SCRIPT_CONTENT_DIR}/assets"
+
+# Archivos de wallpaper
+# WALLPAPER_FILE="/usr/share/backgrounds/mywallpaper.jpg"
+# WALLPAPER_DARK_FILE="/usr/share/backgrounds/mywallpaper.jpg"
+WALLPAPER_SOURCE_FILE="${ASSETS_DIR}/OLPC_FICOHSA_BLUE.png"
+WALLPAPER_SOURCE_DARK_FILE="${ASSETS_DIR}/OLPC_FICOHSA_BLUE.png"
+LOCAL_WALLPAPER_DIR="/usr/local/share/backgrounds/olpc-wallpaper"
+WALLPAPER_FILE="${LOCAL_WALLPAPER_DIR}/OLPC_FICOHSA_BLUE.png"
+WALLPAPER_DARK_FILE="${LOCAL_WALLPAPER_DIR}/OLPC_FICOHSA_BLUE.png"
+
+# URIs usadas por gsettings
+WALLPAPER_URI="file://${WALLPAPER_FILE}"
+WALLPAPER_URI_DARK="file://${WALLPAPER_DARK_FILE}"
+
+# Opciones disponibles en GNOME: none, wallpaper, centered, scaled, stretched, zoom, spanned
+WALLPAPER_PICTURE_OPTIONS="zoom"
+
+# Archivo de configuracion persistente para los valores predeterminados.
+SCRIPT_CONFIG_FILE="${SCRIPT_CONTENT_DIR}/data/olpc_metrics_defaults.conf"
+SYSTEM_CONFIG_FILE="/etc/olpc_metrics_defaults.conf"
+CONFIG_FILE=""
+
+# Configuracion del archivo de metricas.
+DIR="/etc/metrics"
+FILE=""
+
+# ========== Variables de personalities permitidas ==========
+pt_olpc_timor="pt_olpc_timor"
+es_olpc_ficohsa="es_olpc_ficohsa"
+es_olpc_PY="es_olpc_PY"
+es_PA_olpc="es_PA_olpc"
+es_olpc_RD="es_olpc_RD"
+es_olpc_roatan="es_olpc_roatan"
+es_olpc_BO_CEAL="26_es_olpc_BO_1"
+es_olpc_GT="26_es_olpc_GT_1"
+es_olpc_2026="es_olpc_2026"
+
+# Array con las personalities permitidas
+ALLOWED_PERSONALITIES=(
+  "$pt_olpc_timor"
+  "$es_olpc_ficohsa"
+  "$es_olpc_PY"
+  "$es_PA_olpc"
+  "$es_olpc_RD"
+  "$es_olpc_roatan"
+  "$es_olpc_BO_CEAL"
+  "$es_olpc_GT"
+  "$es_olpc_2026"
+)
+
+# ========== Helpers ==========
+require_root() {
+  if [[ $EUID -ne 0 ]]; then
+    echo "Por favor, ejecuta esta opcion con sudo o como root."
+    exit 1
+  fi
+}
+
+is_true() {
+  local value="${1:-}"
+  local normalized
+
+  normalized="$(printf '%s' "$value" | tr '[:lower:]' '[:upper:]')"
+
+  case "$normalized" in
+    TRUE|1|YES|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+personality_message() {
+  case "$1" in
+    "$pt_olpc_timor") printf '%s\n' "Imagen detectada: OLPC Timor Leste" ;;
+    "$es_olpc_ficohsa") printf '%s\n' "Imagen detectada: OLPC Honduras Ficohsa" ;;
+    "$es_olpc_PY") printf '%s\n' "Imagen detectada: OLPC Paraguay" ;;
+    "$es_PA_olpc") printf '%s\n' "Imagen detectada: OLPC Panama" ;;
+    "$es_olpc_RD") printf '%s\n' "Imagen detectada: FZT RD" ;;
+    "$es_olpc_roatan") printf '%s\n' "Imagen detectada: FZT Honduras" ;;
+    "$es_olpc_BO_CEAL") printf '%s\n' "Imagen detectada: OLPC Bolivia" ;;
+    "$es_olpc_GT") printf '%s\n' "Imagen detectada: FZT Guatemala" ;;
+    "$es_olpc_2026") printf '%s\n' "Imagen detectada: OLPC 2026 es" ;;
+    *) return 1 ;;
+  esac
+}
+
+current_bool_digit() {
+  if is_true "$1"; then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+select_config_file() {
+  if [[ -n "${CONFIG_FILE:-}" ]]; then
+    printf '%s\n' "$CONFIG_FILE"
+    return 0
+  fi
+
+  if [[ -f "$SCRIPT_CONFIG_FILE" ]]; then
+    CONFIG_FILE="$SCRIPT_CONFIG_FILE"
+  elif [[ -f "$SYSTEM_CONFIG_FILE" ]]; then
+    CONFIG_FILE="$SYSTEM_CONFIG_FILE"
+  elif [[ -w "$SCRIPT_DIR" ]]; then
+    CONFIG_FILE="$SCRIPT_CONFIG_FILE"
+  else
+    CONFIG_FILE="$SYSTEM_CONFIG_FILE"
+  fi
+
+  printf '%s\n' "$CONFIG_FILE"
+}
+
+select_config_file_for_save() {
+  if [[ -f "$SCRIPT_CONFIG_FILE" && -w "$SCRIPT_CONFIG_FILE" ]]; then
+    CONFIG_FILE="$SCRIPT_CONFIG_FILE"
+  elif [[ ! -e "$SCRIPT_CONFIG_FILE" && -w "$SCRIPT_DIR" ]]; then
+    CONFIG_FILE="$SCRIPT_CONFIG_FILE"
+  else
+    CONFIG_FILE="$SYSTEM_CONFIG_FILE"
+  fi
+
+  printf '%s\n' "$CONFIG_FILE"
+}
+
+load_saved_defaults() {
+  local config_file line key value
+
+  config_file="$(select_config_file)"
+  [[ -f "$config_file" ]] || return 0
+
+  while IFS= read -r line || [[ -n "${line:-}" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+
+    case "$key" in
+      TESTING) TESTING="$value" ;;
+      DEFAULT_COUNTRY) DEFAULT_COUNTRY="$value" ;;
+      DEFAULT_STATE) DEFAULT_STATE="$value" ;;
+      DEFAULT_CITY) DEFAULT_CITY="$value" ;;
+      DEFAULT_FACILITY) DEFAULT_FACILITY="$value" ;;
+      DEFAULT_STREET) DEFAULT_STREET="$value" ;;
+      WALLPAPER_ENABLED) WALLPAPER_ENABLED="$value" ;;
+    esac
+  done < "$config_file"
+}
+
+can_write_path() {
+  local path="$1"
+
+  if [[ -e "$path" ]]; then
+    [[ -w "$path" ]]
+  else
+    [[ -w "$(dirname "$path")" ]]
+  fi
+}
+
+save_saved_defaults() {
+  local config_file
+  local config_dir
+  local tmp_file
+
+  config_file="$(select_config_file_for_save)"
+  config_dir="$(dirname "$config_file")"
+
+  if ! can_write_path "$config_file" && [[ $EUID -ne 0 ]]; then
+    echo "No hay permisos para guardar la configuracion en: $config_file"
+    echo "Ejecuta el script con sudo para poder guardar los valores predeterminados."
+    exit 1
+  fi
+
+  install -d -m 0755 "$config_dir"
+
+  if ! tmp_file="$(mktemp "${config_dir}/.olpc_metrics_defaults.XXXXXX" 2>/dev/null)"; then
+    echo "No se pudo crear un archivo temporal en: $config_dir"
+    exit 1
+  fi
+
+  {
+    printf '# Configuracion guardada por el menu de OLPC Metrics\n'
+    printf 'TESTING=%s\n' "$TESTING"
+    printf 'DEFAULT_COUNTRY=%s\n' "$DEFAULT_COUNTRY"
+    printf 'DEFAULT_STATE=%s\n' "$DEFAULT_STATE"
+    printf 'DEFAULT_CITY=%s\n' "$DEFAULT_CITY"
+    printf 'DEFAULT_FACILITY=%s\n' "$DEFAULT_FACILITY"
+    printf 'DEFAULT_STREET=%s\n' "$DEFAULT_STREET"
+    printf 'WALLPAPER_ENABLED=%s\n' "$WALLPAPER_ENABLED"
+  } > "$tmp_file"
+
+  chmod 0644 "$tmp_file"
+  mv "$tmp_file" "$config_file"
+
+  echo
+  echo "Configuracion guardada en: $config_file"
+}
+
+prompt_boolean_value() {
+  local label="$1"
+  local current_value="$2"
+  local default_option
+  local input
+
+  default_option="$(current_bool_digit "$current_value")"
+
+  while true; do
+    read -r -p "${label} [${default_option}] (1=TRUE, 0=FALSE): " input
+    input="${input:-$default_option}"
+
+    case "$input" in
+      1)
+        printf 'TRUE\n'
+        return 0
+        ;;
+      0)
+        printf 'FALSE\n'
+        return 0
+        ;;
+      *)
+        echo "Entrada invalida. Ingresa 1 para TRUE o 0 para FALSE."
+        ;;
+    esac
+  done
+}
+
+show_current_defaults() {
+  local config_file
+
+  config_file="$(select_config_file)"
+
+  echo "Valores predeterminados actuales:"
+  echo "  PAIS               = $DEFAULT_COUNTRY"
+  echo "  DEPARTAMENTO       = $DEFAULT_STATE"
+  echo "  CIUDAD             = $DEFAULT_CITY"
+  echo "  ESCUELA            = $DEFAULT_FACILITY"
+  echo "  GRADO              = $DEFAULT_STREET"
+  echo "  TESTING            = $TESTING"
+  echo "  WALLPAPER_ENABLED  = $WALLPAPER_ENABLED"
+  echo "  CONFIG_FILE        = $config_file"
+}
+
+configure_defaults() {
+  local country_input
+  local state_input
+  local city_input
+  local facility_input
+  local street_input
+
+  echo
+  echo "Modificar valores predeterminados"
+  echo "Presiona ENTER para conservar el valor actual."
+  echo
+
+  read -r -p "PAIS [${DEFAULT_COUNTRY}]: " country_input
+  DEFAULT_COUNTRY="${country_input:-$DEFAULT_COUNTRY}"
+
+  read -r -p "DEPARTAMENTO [${DEFAULT_STATE}]: " state_input
+  DEFAULT_STATE="${state_input:-$DEFAULT_STATE}"
+
+  read -r -p "CIUDAD [${DEFAULT_CITY}]: " city_input
+  DEFAULT_CITY="${city_input:-$DEFAULT_CITY}"  
+
+  read -r -p "ESCUELA [${DEFAULT_FACILITY}]: " facility_input
+  DEFAULT_FACILITY="${facility_input:-$DEFAULT_FACILITY}"
+
+  read -r -p "GRADO [${DEFAULT_STREET}]: " street_input
+  DEFAULT_STREET="${street_input:-$DEFAULT_STREET}"
+
+  TESTING="$(prompt_boolean_value "TESTING" "$TESTING")"
+  WALLPAPER_ENABLED="$(prompt_boolean_value "WALLPAPER_ENABLED" "$WALLPAPER_ENABLED")"
+
+  save_saved_defaults
+
+  echo
+  echo "Valores predeterminados actualizados."
+}
+
+detect_wallpaper_user() {
+  if [[ -n "${WALLPAPER_TARGET_USER:-}" && "${WALLPAPER_TARGET_USER}" != "root" ]]; then
+    printf '%s\n' "$WALLPAPER_TARGET_USER"
+    return 0
+  fi
+
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    printf '%s\n' "$SUDO_USER"
+    return 0
+  fi
+
+  if command -v loginctl >/dev/null 2>&1; then
+    local sid uid user seat rest active type class
+    while read -r sid uid user seat rest; do
+      [[ -z "${sid:-}" ]] && continue
+      active="$(loginctl show-session "$sid" -p Active --value 2>/dev/null || true)"
+      type="$(loginctl show-session "$sid" -p Type --value 2>/dev/null || true)"
+      class="$(loginctl show-session "$sid" -p Class --value 2>/dev/null || true)"
+
+      if [[ "$active" == "yes" && "$class" == "user" ]]; then
+        case "$type" in
+          wayland|x11|"")
+            printf '%s\n' "$user"
+            return 0
+            ;;
+        esac
+      fi
+    done < <(loginctl list-sessions --no-legend 2>/dev/null || true)
+  fi
+
+  if command -v who >/dev/null 2>&1; then
+    local who_user rest
+    while read -r who_user rest; do
+      if [[ -n "${who_user:-}" && "$who_user" != "root" ]]; then
+        printf '%s\n' "$who_user"
+        return 0
+      fi
+    done < <(who 2>/dev/null || true)
+  fi
+
+  return 1
+}
+
+install_local_wallpapers() {
+  if ! install -d -m 0755 "$LOCAL_WALLPAPER_DIR"; then
+    echo "No se pudo crear el directorio local para wallpapers: $LOCAL_WALLPAPER_DIR"
+    return 1
+  fi
+
+  if ! install -m 0644 "$WALLPAPER_SOURCE_FILE" "$WALLPAPER_FILE"; then
+    echo "No se pudo copiar el wallpaper claro a la ruta local: $WALLPAPER_FILE"
+    return 1
+  fi
+
+  if ! install -m 0644 "$WALLPAPER_SOURCE_DARK_FILE" "$WALLPAPER_DARK_FILE"; then
+    echo "No se pudo copiar el wallpaper oscuro a la ruta local: $WALLPAPER_DARK_FILE"
+    return 1
+  fi
+
+  return 0
+}
+
+apply_wallpaper() {
+  if ! is_true "$WALLPAPER_ENABLED"; then
+    echo "Configuracion de wallpaper omitida (WALLPAPER_ENABLED=FALSE)."
+    return 0
+  fi
+
+  echo
+  echo "Configurando wallpaper..."
+
+  if ! command -v gsettings >/dev/null 2>&1; then
+    echo "No se encontro 'gsettings'. Se omite la configuracion de wallpaper."
+    return 0
+  fi
+
+  if [[ ! -f "$WALLPAPER_SOURCE_FILE" ]]; then
+    echo "No existe el wallpaper claro en el USB: $WALLPAPER_SOURCE_FILE"
+    return 0
+  fi
+
+  if [[ ! -f "$WALLPAPER_SOURCE_DARK_FILE" ]]; then
+    echo "No existe el wallpaper oscuro en el USB: $WALLPAPER_SOURCE_DARK_FILE"
+    return 0
+  fi
+
+  if ! install_local_wallpapers; then
+    return 0
+  fi
+
+  local target_user
+  if ! target_user="$(detect_wallpaper_user)"; then
+    echo "No se pudo detectar un usuario con sesion grafica activa."
+    echo "Define WALLPAPER_TARGET_USER=\"usuario\" si deseas forzarlo."
+    return 0
+  fi
+
+  local target_uid
+  local runtime_dir
+  local bus_addr
+
+  target_uid="$(id -u "$target_user" 2>/dev/null || true)"
+
+  if [[ -z "${target_uid:-}" ]]; then
+    echo "No se pudo obtener el UID de $target_user. Se omite wallpaper."
+    return 0
+  fi
+
+  runtime_dir="/run/user/${target_uid}"
+  bus_addr="unix:path=${runtime_dir}/bus"
+
+  if [[ ! -d "$runtime_dir" ]]; then
+    echo "No existe ${runtime_dir}. El usuario $target_user no parece tener sesion activa."
+    return 0
+  fi
+
+  if [[ ! -S "${runtime_dir}/bus" ]]; then
+    echo "No existe el bus D-Bus en ${runtime_dir}/bus. Se omite wallpaper."
+    return 0
+  fi
+
+  local -a gsettings_cmd
+  if command -v sudo >/dev/null 2>&1; then
+    gsettings_cmd=(sudo -u "$target_user" env "XDG_RUNTIME_DIR=${runtime_dir}" "DBUS_SESSION_BUS_ADDRESS=${bus_addr}" gsettings)
+  elif command -v runuser >/dev/null 2>&1; then
+    gsettings_cmd=(runuser -u "$target_user" -- env "XDG_RUNTIME_DIR=${runtime_dir}" "DBUS_SESSION_BUS_ADDRESS=${bus_addr}" gsettings)
+  else
+    echo "No se encontro 'sudo' ni 'runuser'. Se omite wallpaper."
+    return 0
+  fi
+
+  if ! "${gsettings_cmd[@]}" set org.gnome.desktop.background picture-uri "$WALLPAPER_URI"; then
+    echo "Fallo la configuracion de picture-uri para $target_user."
+    return 0
+  fi
+
+  if ! "${gsettings_cmd[@]}" set org.gnome.desktop.background picture-uri-dark "$WALLPAPER_URI_DARK"; then
+    echo "Fallo la configuracion de picture-uri-dark para $target_user."
+    return 0
+  fi
+
+  if ! "${gsettings_cmd[@]}" set org.gnome.desktop.background picture-options "$WALLPAPER_PICTURE_OPTIONS"; then
+    echo "Fallo la configuracion de picture-options para $target_user."
+    return 0
+  fi
+
+  echo "Wallpaper configurado correctamente para: $target_user"
+  echo "  source claro      = $WALLPAPER_SOURCE_FILE"
+  echo "  source oscuro     = $WALLPAPER_SOURCE_DARK_FILE"
+  echo "  picture-uri      = $WALLPAPER_URI"
+  echo "  picture-uri-dark = $WALLPAPER_URI_DARK"
+  echo "  picture-options  = $WALLPAPER_PICTURE_OPTIONS"
+}
+
+detect_image_personality() {
+  local personality=""
+  local version_out=""
+  local is_allowed=false
+  local p
+
+  if command -v attr >/dev/null 2>&1; then
+    if version_out="$(attr -q -g eos-image-version /sysroot 2>/dev/null)"; then
+      :
+    elif version_out="$(attr -g eos-image-version /sysroot 2>/dev/null)"; then
+      :
+    else
+      version_out=""
+    fi
+
+    if [[ -n "$version_out" ]]; then
+      echo -e "\033[31mVersion de Imagen EndlessOS detectada:\033[0m ${version_out}"
+
+      personality="${version_out##*.}"
+      personality="$(printf '%s' "$personality" | tr -d '\r\n')"
+
+      printf "\033[35mpersonality (imagen):\033[0m \033[1;34m%s\033[0m\n" "$personality"
+
+      for p in "${ALLOWED_PERSONALITIES[@]}"; do
+        if [[ "$personality" == "$p" ]]; then
+          is_allowed=true
+          echo -e "\033[32m$(personality_message "$personality")\033[0m"
+          break
+        fi
+      done
+
+      if [[ "$is_allowed" == false ]]; then
+        echo -e "\033[1;31mError: Imagen no permitida detectada ($personality). El proceso se detiene.\033[0m"
+        exit 2
+      fi
+    else
+      echo "No se pudo obtener la version de la imagen (atributo no disponible)."
+    fi
+  else
+    echo "El comando 'attr' no esta disponible en este sistema."
+  fi
+}
+
+select_metrics_file() {
+  if is_true "$TESTING"; then
+    FILE="$DIR/location-testing.conf"
+  else
+    FILE="$DIR/location.conf"
+  fi
+}
+
+get_serial() {
+  local candidates=(
+    "/sys/class/dmi/id/product_serial"
+    "/sys/class/dmi/id/chassis_serial"
+    "/sys/class/dmi/id/board_serial"
+  )
+  local s
+
+  for f in "${candidates[@]}"; do
+    if [[ -r "$f" ]]; then
+      s="$(tr -d '\0' < "$f" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+      if [[ -n "${s:-}" ]] && \
+         ! [[ "$s" =~ ^(Unknown|Not[[:space:]]*Specified|To[[:space:]]*Be[[:space:]]*Filled[[:space:]]*By[[:space:]]*O\.E\.M\.|Default[[:space:]]*string|None|0+|System[[:space:]]*Serial[[:space:]]*Number)$ ]]; then
+        echo "$s"
+        return 0
+      fi
+    fi
+  done
+
+  if [[ -r /sys/class/dmi/id/product_uuid ]]; then
+    s="$(tr -d '\0' < /sys/class/dmi/id/product_uuid | tr -d '\r' | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${s:-}" ]] && { echo "$s"; return 0; }
+  fi
+
+  if [[ -r /etc/machine-id ]]; then
+    s="$(head -n1 /etc/machine-id | tr -d '\r' | tr '[:lower:]' '[:upper:]')"
+    [[ -n "${s:-}" ]] && { echo "MID-${s}"; return 0; }
+  fi
+
+  echo "UNKNOWN"
+}
+
+ensure_dir() {
+  install -d -m 0755 "$DIR"
+}
+
+backup_if_exists() {
+  if [[ -f "$FILE" ]]; then
+    cp -a "$FILE" "${FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  fi
+}
+
+set_kv() {
+  local key="$1"
+  local val="$2"
+  local val_escaped
+
+  val_escaped="$(printf '%s' "$val" | sed -e 's/[\/&]/\\&/g')"
+  if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$FILE"; then
+    sed -i "s|^[[:space:]]*${key}[[:space:]]*=.*|${key} = ${val_escaped}|" "$FILE"
+  else
+    printf "%s = %s\n" "$key" "$val" >> "$FILE"
+  fi
+}
+
+format_generation_timestamp() {
+  local day
+  local month_num
+  local month_name
+  local year
+  local time_value
+
+  day="$(date '+%d')"
+  day="${day#0}"
+  month_num="$(date '+%m')"
+  year="$(date '+%Y')"
+  time_value="$(date '+%H:%M:%S')"
+
+  case "$month_num" in
+    01) month_name="ene" ;;
+    02) month_name="feb" ;;
+    03) month_name="mar" ;;
+    04) month_name="abr" ;;
+    05) month_name="may" ;;
+    06) month_name="jun" ;;
+    07) month_name="jul" ;;
+    08) month_name="ago" ;;
+    09) month_name="sep" ;;
+    10) month_name="oct" ;;
+    11) month_name="nov" ;;
+    12) month_name="dic" ;;
+    *) month_name="$month_num" ;;
+  esac
+
+  printf '%s %s %s - %s\n' "$day" "$month_name" "$year" "$time_value"
+}
+
+append_generation_footer() {
+  local penultimate_line
+  local last_line
+
+  penultimate_line="$(tail -n 2 "$FILE" 2>/dev/null | head -n 1 || true)"
+  last_line="$(tail -n 1 "$FILE" 2>/dev/null || true)"
+
+  if [[ "$penultimate_line" == "# Archivo generado" && "$last_line" == \#* ]]; then
+    sed -i '$d' "$FILE"
+    sed -i '$d' "$FILE"
+  fi
+
+  printf '# Archivo generado\n# %s\n' "$(format_generation_timestamp)" >> "$FILE"
+}
+
+check_internet() {
+  ping -c 1 -W 1 1.1.1.1 >/dev/null 2>&1
+}
+
+run_upload_metrics() {
+  local code
+
+  if command -v eos-upload-metrics >/dev/null 2>&1; then
+    echo "Ejecutando 'eos-upload-metrics'..."
+    if eos-upload-metrics; then
+      echo "Metricas enviadas correctamente."
+    else
+      code=$?
+      echo "Error al ejecutar 'eos-upload-metrics' (codigo ${code})."
+      exit "$code"
+    fi
+  else
+    echo "No se encontro el comando 'eos-upload-metrics' en este sistema."
+    exit 127
+  fi
+}
+
+write_metrics_file() {
+  local facility
+  local street
+  local country
+  local state
+  local city
+  local serial
+
+  require_root
+  detect_image_personality
+  select_metrics_file
+
+  facility="$DEFAULT_FACILITY"
+  street="$DEFAULT_STREET"
+  country="$DEFAULT_COUNTRY"
+  state="$DEFAULT_STATE"
+  city="$DEFAULT_CITY"
+  serial="$(get_serial)"
+
+  echo
+  echo "Destino: $FILE"
+  echo "Aplicando valores predeterminados guardados."
+
+  ensure_dir
+  if [[ -f "$FILE" ]]; then
+    backup_if_exists
+    if ! grep -qE "^\[Label\]" "$FILE"; then
+      sed -i '1i [Label]' "$FILE"
+    fi
+    set_kv "facility" "$facility"
+    set_kv "street" "$street"
+    set_kv "country" "$country"
+    set_kv "state" "$state"
+    set_kv "city" "$city"
+    set_kv "id" "$serial"
+  else
+    cat > "$FILE" <<EOF
+[Label]
+facility = ${facility}
+street = ${street}
+country = ${country}
+state = ${state}
+city = ${city}
+id = ${serial}
+EOF
+  fi
+
+  append_generation_footer
+
+  chmod 0644 "$FILE"
+
+  echo "Listo:"
+  echo "  facility = $facility"
+  echo "  street   = $street"
+  echo "  country  = $country"
+  echo "  state    = $state"
+  echo "  city     = $city"
+  echo "  id       = $serial"
+  echo "Archivo escrito en: $FILE"
+}
+
+handle_metrics_upload() {
+  echo
+  if check_internet; then
+    echo "Conexion a internet detectada. Enviando metricas ahora..."
+    run_upload_metrics
+  else
+    local confirm
+    echo "No hay conexion a internet."
+    read -r -p "Conecta a internet y confirma con Y para enviar 'eos-upload-metrics' ahora [y/N]: " confirm
+    case "$confirm" in
+      Y|y)
+        if check_internet; then
+          run_upload_metrics
+        else
+          echo "Aun no hay conexion. Verifica tu red y ejecuta manualmente: eos-upload-metrics"
+          exit 1
+        fi
+        ;;
+      *)
+        echo "Omitiendo el envio de metricas por ahora."
+        ;;
+    esac
+  fi
+}
+
+run_metrics_only() {
+  write_metrics_file
+  handle_metrics_upload
+}
+
+run_wallpaper_only() {
+  require_root
+  apply_wallpaper
+}
+
+run_metrics_and_wallpaper() {
+  write_metrics_file
+  apply_wallpaper
+  handle_metrics_upload
+}
+
+show_menu() {
+  echo
+  echo "========== Menu de configuracion OLPC =========="
+  echo "0. Ejecutar el script de metricas de OLPC."
+  echo "1. Ejecutar el cambio de Wallpaper FICOHSA."
+  echo "2. Ejecutar el script metricas de OLPC + el cambio de Wallpaper."
+  echo "3. Modificar los valores predeterminados [PAIS, CIUDAD, ESCUELA, GRADO]."
+  echo "ESC. Salir."
+  echo
+  show_current_defaults
+  echo
+}
+
+main() {
+  local option
+
+  load_saved_defaults
+
+  while true; do
+    show_menu
+    IFS= read -r -s -n 1 -p "Selecciona una opcion [0-3 o ESC para salir]: " option
+    echo
+
+    case "$option" in
+      0)
+        run_metrics_only
+        break
+        ;;
+      1)
+        run_wallpaper_only
+        break
+        ;;
+      2)
+        run_metrics_and_wallpaper
+        break
+        ;;
+      3)
+        configure_defaults
+        ;;
+      $'\e')
+        echo "Saliendo del programa."
+        break
+        ;;
+      *)
+        echo "Opcion invalida. Ingresa 0, 1, 2, 3 o presiona ESC para salir."
+        ;;
+    esac
+  done
+}
+
+main "$@"
 
 EOF
 
 # Grant execution permission to the script.
 chmod +x /usr/local/bin/olpc-metrics-config
-
-# # Enable the service for the next boot.
-# # Note: The systemd daemon itself is not running during this hook. This command
-# # simply creates the necessary symlink for the service to be enabled on the
-# # first real boot of the system.
-# ln -s /etc/systemd/system/olpc-sn-collector.service /etc/systemd/system/multi-user.target.wants/
-
-# echo "First-run service enabled."
