@@ -14,4 +14,5 @@ With content:
 
 [image]
 # Product name for ISO labels, etc
-product_name = OLPC_2026
+# product_name = OLPC_2026
+product_name = OLPC 2026 DEV
