@@ -5,7 +5,6 @@ mkdir -p /usr/local/bin
 
 # Creates the script that collects the serial number of OLPC devices.
 cat > /usr/local/bin/olpc-metrics-config <<'OLPC_METRICS_SCRIPT'
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -20,8 +19,8 @@ set -euo pipefail
 #    - Opcionalmente configura el wallpaper del usuario activo con gsettings.
 #    - Verifica conexion a internet y ejecuta eos-upload-metrics.
 #    - Guarda los valores predeterminados en un archivo persistente.
-#  Version: v9 - from olpc-eos-image-builder
-#  Fecha:   14-mar-2026
+#  Version: v9.1
+#  Fecha:   16-mar-2026
 # ============================================================
 
 # ========== Configuracion inicial incorporada ==========
@@ -54,11 +53,11 @@ ASSETS_DIR="${SCRIPT_CONTENT_DIR}/assets"
 # Archivos de wallpaper
 # WALLPAPER_FILE="/usr/share/backgrounds/mywallpaper.jpg"
 # WALLPAPER_DARK_FILE="/usr/share/backgrounds/mywallpaper.jpg"
-WALLPAPER_SOURCE_FILE="${ASSETS_DIR}/OLPC_FICOHSA_BLUE.png"
-WALLPAPER_SOURCE_DARK_FILE="${ASSETS_DIR}/OLPC_FICOHSA_BLUE.png"
+WALLPAPER_SOURCE_FILE="${ASSETS_DIR}/OLPC_WALLPAPER.png"
+WALLPAPER_SOURCE_DARK_FILE="${ASSETS_DIR}/OLPC_WALLPAPER.png"
 LOCAL_WALLPAPER_DIR="/usr/local/share/backgrounds/olpc-wallpaper"
-WALLPAPER_FILE="${LOCAL_WALLPAPER_DIR}/OLPC_FICOHSA_BLUE.png"
-WALLPAPER_DARK_FILE="${LOCAL_WALLPAPER_DIR}/OLPC_FICOHSA_BLUE.png"
+WALLPAPER_FILE="${LOCAL_WALLPAPER_DIR}/OLPC_WALLPAPER.png"
+WALLPAPER_DARK_FILE="${LOCAL_WALLPAPER_DIR}/OLPC_WALLPAPER.png"
 
 # URIs usadas por gsettings
 WALLPAPER_URI="file://${WALLPAPER_FILE}"
@@ -485,6 +484,7 @@ apply_wallpaper() {
 detect_image_personality() {
   local personality=""
   local version_out=""
+  local version_out_lower=""
   local is_allowed=false
   local p
 
@@ -502,6 +502,7 @@ detect_image_personality() {
 
       personality="${version_out##*.}"
       personality="$(printf '%s' "$personality" | tr -d '\r\n')"
+      version_out_lower="$(printf '%s' "$version_out" | tr '[:upper:]' '[:lower:]')"
 
       printf "\033[35mpersonality (imagen):\033[0m \033[1;34m%s\033[0m\n" "$personality"
 
@@ -512,6 +513,11 @@ detect_image_personality() {
           break
         fi
       done
+
+      if [[ "$is_allowed" == false && "$version_out_lower" == *olpc* ]]; then
+        is_allowed=true
+        echo -e "\033[32mImagen detectada: personality permitida por contener 'olpc' en eos-image-version.\033[0m"
+      fi
 
       if [[ "$is_allowed" == false ]]; then
         echo -e "\033[1;31mError: Imagen no permitida detectada ($personality). El proceso se detiene.\033[0m"
@@ -763,7 +769,7 @@ show_menu() {
   echo
   echo "========== Menu de configuracion OLPC =========="
   echo "0. Ejecutar el script de metricas de OLPC."
-  echo "1. Ejecutar el cambio de Wallpaper FICOHSA."
+  echo "1. Ejecutar el cambio de Wallpaper."
   echo "2. Ejecutar el script metricas de OLPC + el cambio de Wallpaper."
   echo "3. Modificar los valores predeterminados [PAIS, CIUDAD, ESCUELA, GRADO]."
   echo "ESC. Salir."
