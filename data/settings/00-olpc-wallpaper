@@ -1,0 +1,4 @@
+[org/gnome/desktop/background]
+picture-uri='file:///usr/local/share/backgrounds/olpc/OLPC_Wallpaper-2026_4K.png'
+picture-uri-dark='file:///usr/local/share/backgrounds/olpc/OLPC_Wallpaper-2026_4K.png'
+picture-options='zoom'

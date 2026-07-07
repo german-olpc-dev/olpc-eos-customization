@@ -1,0 +1,12 @@
+# Install the default OLPC wallpaper into the image. The dconf default
+# that points at it lives in data/settings/00-olpc-wallpaper, wired via
+# [image] settings_add. In the EOS ostree /usr/local is a symlink to
+# /var/local, so the file is copied into the deployment's var
+# (host-side hook: chroot hooks cannot read the local data directory).
+
+OLPC_WALLPAPER_FILE=OLPC_Wallpaper-2026_4K.png
+
+TGT=${OSTREE_VAR}/local/share/backgrounds/olpc
+mkdir -p ${TGT}
+
+install -m 0644 "${EIB_LOCALDATADIR}/wallpaper/${OLPC_WALLPAPER_FILE}" ${TGT}/
