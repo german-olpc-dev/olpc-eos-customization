@@ -1,0 +1,12 @@
+# Install the app-folder .directory files referenced by the icon-grid
+# JSON so the desktop folders show their names instead of "Unnamed".
+# In the EOS ostree /usr/local is a symlink to /var/local, so the files
+# are copied into the deployment's var (host-side hook, not .chroot,
+# because chroot hooks cannot read the local data directory).
+
+TGT=${OSTREE_VAR}/local/share/desktop-directories
+mkdir -p ${TGT}
+
+for file in "${EIB_LOCALDATADIR}"/icon-grid/*.directory; do
+    install -m 0644 "${file}" ${TGT}/
+done
