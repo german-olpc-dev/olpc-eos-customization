@@ -16,3 +16,6 @@ With content:
 # Product name for ISO labels, etc
 # product_name = OLPC_2026
 product_name = OLPC 2026 DEV
+
+# Run
+sudo ./eos-image-builder --localdir ../olpc-eos-customization/ --use-production-ostree eos6.0 --personality es_olpc_26_dev
