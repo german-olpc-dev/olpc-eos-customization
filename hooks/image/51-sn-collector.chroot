@@ -27,7 +27,7 @@ EOF
 # number.
 cat > /etc/metrics/location.conf <<EOF
 [Label]
-facility = OLPC Factory 2026
+facility = OLPC Default 2027
 street = 
 country = 
 state = 
