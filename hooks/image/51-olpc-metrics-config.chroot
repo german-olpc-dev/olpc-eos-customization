@@ -85,7 +85,7 @@ es_olpc_roatan="es_olpc_roatan"
 es_olpc_BO_CEAL="26_es_olpc_BO_1"
 es_olpc_GT="26_es_olpc_GT_1"
 es_olpc_2026="es_olpc_2026"
-es_olpc_2026="es_olpc_2027"
+es_olpc_2027="es_olpc_2027"
 
 # Array con las personalities permitidas
 ALLOWED_PERSONALITIES=(
